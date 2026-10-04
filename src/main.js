@@ -2,6 +2,15 @@ import './style.css';
 import { createIcons, icons } from 'lucide';
 import confetti from 'canvas-confetti';
 import { CATEGORIES, LOCATIONS, PHOTOGRAPHERS, INITIAL_CHATS, MOCK_BOOKINGS } from './data/mockData.js';
+import {
+  isSupabaseConfigured,
+  getPhotographersFromSupabase,
+  getBookingsFromSupabase,
+  insertBookingToSupabase,
+  getMessagesFromSupabase,
+  insertMessageToSupabase,
+  subscribeToChatMessages
+} from './supabase.js';
 
 // Application State
 const state = {
@@ -14,8 +23,10 @@ const state = {
   activeChatId: 'p1',
   profileTab: 'portfolio', // 'portfolio', 'packages', 'reviews'
   bookingsFilter: 'all', // 'all', 'active', 'completed'
+  photographers: [...PHOTOGRAPHERS],
   bookings: [...MOCK_BOOKINGS],
   chats: JSON.parse(JSON.stringify(INITIAL_CHATS)),
+  isLiveBackend: isSupabaseConfigured,
   lightboxPhoto: null,
   bookingModal: {
     isOpen: false,
@@ -83,7 +94,7 @@ function triggerCelebration() {
 
 // Get Selected Photographer Helper
 function getSelectedPhotographer() {
-  return PHOTOGRAPHERS.find(p => p.id === state.selectedPhotographerId) || PHOTOGRAPHERS[0];
+  return state.photographers.find(p => p.id === state.selectedPhotographerId) || state.photographers[0] || PHOTOGRAPHERS[0];
 }
 
 // Get Active Chat Helper
@@ -146,6 +157,10 @@ function renderTopNavbar() {
       </button>
 
       <div class="nav-actions">
+        <span class="backend-status-pill ${state.isLiveBackend ? 'live' : 'mock'}" title="${state.isLiveBackend ? 'Connected to live Supabase backend' : 'Running in local demo mode. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable live cloud sync.'}">
+          <span class="status-dot"></span>
+          <span>${state.isLiveBackend ? 'Supabase Live' : 'Supabase Ready'}</span>
+        </span>
         <button class="role-pill-badge" id="toggle-role-btn" title="Click to switch between Client and Photographer mode">
           <i data-lucide="${state.userRole === 'client' ? 'user' : 'camera'}" style="width: 14px; height: 14px;"></i>
           <span>Mode: ${state.userRole === 'client' ? 'Client' : 'Photographer'}</span>
@@ -237,20 +252,21 @@ function renderSplashScreen() {
 // 4. EXPLORE / HOME SCREEN
 function renderExploreScreen() {
   // Filter photographers
-  const filteredPhotographers = PHOTOGRAPHERS.filter(p => {
+  const sourcePhotographers = state.photographers || PHOTOGRAPHERS;
+  const filteredPhotographers = sourcePhotographers.filter(p => {
     const matchesCategory = state.selectedCategory === 'all' || p.category === state.selectedCategory;
     const matchesLocation = state.selectedLocation === 'All Locations' || p.location.includes(state.selectedLocation.split(' ')[0]);
     const matchesSearch = !state.searchQuery || 
       p.name.toLowerCase().includes(state.searchQuery.toLowerCase()) ||
       p.handle.toLowerCase().includes(state.searchQuery.toLowerCase()) ||
       p.bio.toLowerCase().includes(state.searchQuery.toLowerCase()) ||
-      p.gear.some(g => g.toLowerCase().includes(state.searchQuery.toLowerCase()));
+      (p.gear && p.gear.some(g => g.toLowerCase().includes(state.searchQuery.toLowerCase())));
     return matchesCategory && matchesLocation && matchesSearch;
   });
 
   // Trending photos for dynamic masonry grid
-  const allTrendingPhotos = PHOTOGRAPHERS.flatMap(p => 
-    p.portfolio.map(photo => ({ ...photo, photographer: p }))
+  const allTrendingPhotos = sourcePhotographers.flatMap(p => 
+    (p.portfolio || []).map(photo => ({ ...photo, photographer: p }))
   ).filter(item => {
     return state.selectedCategory === 'all' || item.category === state.selectedCategory;
   });
@@ -1351,6 +1367,9 @@ function attachEventListeners() {
       state.bookingModal.isOpen = false;
       state.currentScreen = 'bookings';
       
+      // Sync to Supabase cloud if active
+      insertBookingToSupabase(newBooking);
+
       renderApp();
       triggerCelebration();
       showToast(`Success! Shoot locked with ${p.name}. Deposit placed safely in escrow.`);
@@ -1397,7 +1416,7 @@ function attachEventListeners() {
       const deposit = Number(e.currentTarget.dataset.deposit);
       const title = e.currentTarget.dataset.title;
       const dates = e.currentTarget.dataset.dates;
-      const p = PHOTOGRAPHERS.find(x => x.id === photogId) || PHOTOGRAPHERS[0];
+      const p = (state.photographers || PHOTOGRAPHERS).find(x => x.id === photogId) || PHOTOGRAPHERS[0];
 
       // Add to bookings
       const quoteBooking = {
@@ -1418,29 +1437,35 @@ function attachEventListeners() {
       };
 
       state.bookings.unshift(quoteBooking);
+      insertBookingToSupabase(quoteBooking);
 
       // Add confirmation message to chat
       const chat = getActiveChat();
-      chat.messages.push({
+      const userConfirmMsg = {
         id: 'm-confirm-' + Date.now(),
         sender: 'user',
         text: `I've accepted the quote and secured the ${formatINR(deposit)} deposit! Looking forward to collaborating on our wedding days in Udaipur.`,
         time: 'Just now'
-      });
+      };
+      chat.messages.push(userConfirmMsg);
+      insertMessageToSupabase(p.id, userConfirmMsg);
 
       triggerCelebration();
       showToast(`Custom quote accepted! Deposit locked in escrow.`);
 
       // Simulate Photographer auto-reply in 1.2s
       setTimeout(() => {
-        chat.messages.push({
+        const creatorReplyMsg = {
           id: 'm-reply-' + Date.now(),
           sender: 'photographer',
           text: `Fantastic news! The dates are officially locked in our studio master calendar. I will set up our shared Pinterest moodboard and pre-shoot checklist today. Let's make pure magic! ✨`,
           time: 'Just now'
-        });
+        };
+        chat.messages.push(creatorReplyMsg);
         chat.lastMessage = `Fantastic news! The dates are officially locked...`;
         chat.lastTime = 'Just now';
+        insertMessageToSupabase(p.id, creatorReplyMsg);
+
         renderApp();
       }, 1200);
 
@@ -1470,18 +1495,21 @@ function attachEventListeners() {
 
       const userText = input.value.trim();
       const chat = getActiveChat();
-      const photog = PHOTOGRAPHERS.find(p => p.id === chat.photographerId) || PHOTOGRAPHERS[0];
+      const photog = (state.photographers || PHOTOGRAPHERS).find(p => p.id === chat.photographerId) || PHOTOGRAPHERS[0];
 
       // Append user message
-      chat.messages.push({
+      const newMsg = {
         id: 'm-' + Date.now(),
         sender: 'user',
         text: userText,
         time: 'Just now'
-      });
+      };
+      chat.messages.push(newMsg);
       chat.lastMessage = userText;
       chat.lastTime = 'Just now';
       input.value = '';
+
+      insertMessageToSupabase(chat.photographerId, newMsg);
 
       renderApp();
 
@@ -1500,15 +1528,18 @@ function attachEventListeners() {
           reply = `Yes! I currently have that weekend reserved for private bookings. Let's lock it in before our wedding calendar fills up!`;
         }
 
-        chat.messages.push({
+        const autoReply = {
           id: 'm-reply-' + Date.now(),
           sender: 'photographer',
           text: reply,
           time: 'Just now'
-        });
+        };
+        chat.messages.push(autoReply);
         chat.lastMessage = reply;
         chat.lastTime = 'Just now';
         
+        insertMessageToSupabase(chat.photographerId, autoReply);
+
         renderApp();
         const updatedContainer = document.getElementById('chat-messages-container');
         if (updatedContainer) updatedContainer.scrollTop = updatedContainer.scrollHeight;
@@ -1525,5 +1556,34 @@ function attachEventListeners() {
   });
 }
 
+// Supabase Async Hydration
+async function initBackendData() {
+  if (isSupabaseConfigured) {
+    try {
+      const [remotePhotographers, remoteBookings] = await Promise.all([
+        getPhotographersFromSupabase(),
+        getBookingsFromSupabase()
+      ]);
+
+      let hasUpdates = false;
+      if (remotePhotographers && remotePhotographers.length > 0) {
+        state.photographers = remotePhotographers;
+        hasUpdates = true;
+      }
+      if (remoteBookings && remoteBookings.length > 0) {
+        state.bookings = remoteBookings;
+        hasUpdates = true;
+      }
+
+      if (hasUpdates) {
+        renderApp();
+      }
+    } catch (err) {
+      console.warn('[Supabase] Initial sync failed:', err);
+    }
+  }
+}
+
 // Initial Boot
 renderApp();
+initBackendData();
