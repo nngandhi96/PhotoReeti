@@ -295,3 +295,108 @@ export function subscribeToChatMessages(photographerId, onNewMessage) {
     return null;
   }
 }
+
+// ==========================================
+// SUPABASE AUTHENTICATION SERVICES
+// ==========================================
+
+/**
+ * Register a new user with email, password and profile metadata
+ */
+export async function signUpUser({ email, password, fullName, role = 'client', phone = '' }) {
+  if (!isSupabaseConfigured || !supabase) {
+    const mockUser = {
+      id: 'usr_' + Date.now(),
+      email,
+      user_metadata: { full_name: fullName, role, phone }
+    };
+    return { data: { user: mockUser, session: { user: mockUser } }, error: null };
+  }
+
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          role,
+          phone
+        }
+      }
+    });
+    return { data, error };
+  } catch (err) {
+    return { data: null, error: err };
+  }
+}
+
+/**
+ * Sign in an existing user with email and password
+ */
+export async function signInUser({ email, password }) {
+  if (!isSupabaseConfigured || !supabase) {
+    const mockUser = {
+      id: 'usr_demo_' + Date.now(),
+      email,
+      user_metadata: { full_name: email.split('@')[0], role: 'client' }
+    };
+    return { data: { user: mockUser, session: { user: mockUser } }, error: null };
+  }
+
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+    return { data, error };
+  } catch (err) {
+    return { data: null, error: err };
+  }
+}
+
+/**
+ * Sign out current user
+ */
+export async function signOutUser() {
+  if (!isSupabaseConfigured || !supabase) {
+    return { error: null };
+  }
+  try {
+    const { error } = await supabase.auth.signOut();
+    return { error };
+  } catch (err) {
+    return { error: err };
+  }
+}
+
+/**
+ * Get current active user from active session
+ */
+export async function getAuthUser() {
+  if (!isSupabaseConfigured || !supabase) return null;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.user || null;
+  } catch (err) {
+    console.warn('[Supabase Auth] Failed getting session:', err);
+    return null;
+  }
+}
+
+/**
+ * Listen to auth state changes (SIGN_IN, SIGN_OUT, TOKEN_REFRESHED)
+ */
+export function subscribeToAuth(callback) {
+  if (!isSupabaseConfigured || !supabase) return null;
+  try {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      callback(session?.user || null, event);
+    });
+    return subscription;
+  } catch (err) {
+    console.warn('[Supabase Auth] Failed subscribing to auth:', err);
+    return null;
+  }
+}
+

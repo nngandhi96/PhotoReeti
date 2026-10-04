@@ -9,13 +9,40 @@ import {
   insertBookingToSupabase,
   getMessagesFromSupabase,
   insertMessageToSupabase,
-  subscribeToChatMessages
+  subscribeToChatMessages,
+  signUpUser,
+  signInUser,
+  signOutUser,
+  getAuthUser,
+  subscribeToAuth
 } from './supabase.js';
+
+// Retrieve cached user session from localStorage
+const cachedUser = (() => {
+  try {
+    const raw = localStorage.getItem('photoreeti_user');
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+})();
 
 // Application State
 const state = {
   currentScreen: 'splash', // 'splash', 'explore', 'profile', 'chat', 'bookings'
-  userRole: 'client', // 'client' or 'photographer'
+  userRole: cachedUser?.role || 'client', // 'client' or 'photographer'
+  currentUser: cachedUser, // { id, email, fullName, role, avatar, phone }
+  userDropdownOpen: false,
+  authModal: {
+    isOpen: false,
+    mode: 'login', // 'login' or 'signup'
+    role: 'client', // 'client' or 'photographer'
+    loading: false,
+    error: null,
+    success: null,
+    showPassword: false,
+    intendedAction: null
+  },
   selectedLocation: 'All Locations',
   selectedCategory: 'all',
   searchQuery: '',
@@ -120,6 +147,16 @@ function getActiveChat() {
   return chat;
 }
 
+// Get Initials Helper
+function getInitials(name) {
+  if (!name) return 'PR';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return parts[0].slice(0, 2).toUpperCase();
+}
+
 // App Root Render Function
 function renderApp() {
   const app = document.getElementById('app');
@@ -133,12 +170,71 @@ function renderApp() {
       ${renderBookingModal()}
       ${renderLocationModal()}
       ${renderLightboxModal()}
+      ${renderAuthModal()}
     </div>
   `;
 
   // Initialize Lucide Icons after DOM rendering
   createIcons({ icons });
   attachEventListeners();
+}
+
+// Render User Auth Nav Trigger & Profile Menu
+function renderUserAuthNav() {
+  if (state.currentUser) {
+    const displayName = state.currentUser.fullName || state.currentUser.email.split('@')[0];
+    const roleLabel = state.currentUser.role === 'photographer' ? 'Creator' : 'Client';
+    const initials = getInitials(displayName);
+
+    return `
+      <div class="user-menu-wrapper" id="user-menu-wrapper">
+        <button class="user-profile-badge" id="user-profile-menu-toggle" title="Click to view account menu">
+          <div class="user-avatar-circle">
+            ${state.currentUser.avatar 
+              ? `<img src="${state.currentUser.avatar}" alt="${displayName}" />` 
+              : initials}
+          </div>
+          <div class="user-meta-col">
+            <span class="user-name-text">${displayName}</span>
+            <span class="user-role-subtag">${roleLabel}</span>
+          </div>
+          <i data-lucide="chevron-down" style="width: 14px; height: 14px; opacity: 0.7;"></i>
+        </button>
+
+        ${state.userDropdownOpen ? `
+          <div class="user-dropdown-menu" id="user-dropdown-container">
+            <div class="dropdown-user-header">
+              <div style="font-weight: 700; color: var(--gold-champagne); font-size: 0.92rem;">${displayName}</div>
+              <div class="dropdown-user-email">${state.currentUser.email}</div>
+            </div>
+            <button class="dropdown-item" id="dropdown-switch-role-btn">
+              <i data-lucide="repeat" style="width: 16px; height: 16px; color: var(--gold-primary);"></i>
+              <span>Switch to ${state.userRole === 'client' ? 'Creator' : 'Client'} Mode</span>
+            </button>
+            <button class="dropdown-item" id="dropdown-bookings-btn">
+              <i data-lucide="calendar" style="width: 16px; height: 16px; color: var(--teal-accent);"></i>
+              <span>My Bookings</span>
+            </button>
+            <button class="dropdown-item" id="dropdown-chat-btn">
+              <i data-lucide="message-circle" style="width: 16px; height: 16px; color: var(--petrol-accent);"></i>
+              <span>My Messages</span>
+            </button>
+            <button class="dropdown-item danger" id="dropdown-signout-btn">
+              <i data-lucide="log-out" style="width: 16px; height: 16px;"></i>
+              <span>Sign Out</span>
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  return `
+    <button class="btn-auth-signin" id="open-auth-modal-btn">
+      <i data-lucide="log-in" style="width: 16px; height: 16px;"></i>
+      <span>Sign In</span>
+    </button>
+  `;
 }
 
 // 1. TOP NAVBAR
@@ -165,6 +261,7 @@ function renderTopNavbar() {
           <i data-lucide="${state.userRole === 'client' ? 'user' : 'camera'}" style="width: 14px; height: 14px;"></i>
           <span>Mode: ${state.userRole === 'client' ? 'Client' : 'Photographer'}</span>
         </button>
+        ${renderUserAuthNav()}
       </div>
     </header>
   `;
@@ -229,6 +326,17 @@ function renderSplashScreen() {
           <span>Enter Marketplace</span>
           <i data-lucide="arrow-right" style="width: 18px; height: 18px;"></i>
         </button>
+
+        <div style="margin-top: 14px; font-size: 0.86rem; color: var(--text-muted); text-align: center;">
+          ${state.currentUser ? `
+            <span style="color: var(--gold-champagne);">
+              <i data-lucide="check-circle" style="width: 15px; height: 15px; display: inline-block; vertical-align: middle; color: var(--teal-accent);"></i>
+              Signed in as <strong>${state.currentUser.fullName || state.currentUser.email}</strong>
+            </span>
+          ` : `
+            Already have an account? <button id="splash-auth-trigger" style="background: none; border: none; color: var(--gold-light); font-weight: 600; cursor: pointer; text-decoration: underline; font-size: 0.86rem; font-family: var(--font-body);">Sign In / Register</button>
+          `}
+        </div>
       </div>
 
       <div class="splash-features-grid">
@@ -930,6 +1038,11 @@ function renderBottomNav() {
         <i data-lucide="camera"></i>
         <span class="nav-tab-label">Creator</span>
       </button>
+
+      <button class="nav-tab-item" id="bottom-nav-auth-btn">
+        <i data-lucide="${state.currentUser ? 'user-check' : 'user'}"></i>
+        <span class="nav-tab-label">${state.currentUser ? 'Account' : 'Sign In'}</span>
+      </button>
     </nav>
   `;
 }
@@ -1083,6 +1196,238 @@ function renderLightboxModal() {
         </div>
       </div>
     </div>
+  `;
+}
+
+// 9.5 AUTHENTICATION MODAL (LOGIN & SIGNUP)
+function renderAuthModal() {
+  if (!state.authModal.isOpen) return '';
+  const isLogin = state.authModal.mode === 'login';
+
+  return `
+    <div class="modal-overlay open" id="auth-modal-overlay">
+      <div class="modal-dialog auth-modal-dialog">
+        <button class="btn-icon modal-close-btn" id="close-auth-modal-btn">
+          <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+        </button>
+
+        <div class="auth-header-crest">
+          <img src="/assets/photoreeti-logo.jpg" alt="PhotoReeti Logo" class="auth-logo-badge" />
+          <h2 class="auth-title gold-text">${isLogin ? 'Welcome Back' : 'Create Account'}</h2>
+          <p class="auth-subtitle">
+            ${isLogin 
+              ? 'Sign in to access your direct photography dashboard & quotes' 
+              : 'Join India’s premier peer-to-peer photography network'
+            }
+          </p>
+        </div>
+
+        <div class="auth-segmented-tabs">
+          <button class="auth-tab-btn ${isLogin ? 'active' : ''}" id="tab-login-btn">
+            <i data-lucide="log-in" style="width: 16px; height: 16px;"></i>
+            Sign In
+          </button>
+          <button class="auth-tab-btn ${!isLogin ? 'active' : ''}" id="tab-signup-btn">
+            <i data-lucide="user-plus" style="width: 16px; height: 16px;"></i>
+            Create Account
+          </button>
+        </div>
+
+        ${state.authModal.error ? `
+          <div class="auth-alert-box error">
+            <i data-lucide="alert-circle" style="width: 18px; height: 18px; flex-shrink: 0; color: #ef4444;"></i>
+            <div>${state.authModal.error}</div>
+          </div>
+        ` : ''}
+
+        ${state.authModal.success ? `
+          <div class="auth-alert-box success">
+            <i data-lucide="check-circle" style="width: 18px; height: 18px; flex-shrink: 0; color: #10b981;"></i>
+            <div>${state.authModal.success}</div>
+          </div>
+        ` : ''}
+
+        ${isLogin ? renderLoginForm() : renderSignupForm()}
+
+        <div class="auth-demo-divider">
+          <span>Or 1-Click Instant Demo Login</span>
+        </div>
+
+        <div class="auth-demo-grid">
+          <button class="auth-demo-btn" id="demo-creator-btn" title="Sign in instantly as Master Creator">
+            <i data-lucide="camera" style="width: 18px; height: 18px; color: var(--gold-primary);"></i>
+            <span>Kabir Verma</span>
+            <span class="demo-subtext">Master Creator</span>
+          </button>
+          <button class="auth-demo-btn" id="demo-client-btn" title="Sign in instantly as Verified Client">
+            <i data-lucide="user" style="width: 18px; height: 18px; color: var(--teal-accent);"></i>
+            <span>Ananya Sharma</span>
+            <span class="demo-subtext">Verified Client</span>
+          </button>
+        </div>
+
+        <div class="auth-footer-prompt">
+          ${isLogin ? `
+            Don't have an account yet? <span class="auth-footer-link" id="switch-to-signup-link">Create free account</span>
+          ` : `
+            Already have an account? <span class="auth-footer-link" id="switch-to-login-link">Sign in here</span>
+          `}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLoginForm() {
+  return `
+    <form id="auth-signin-form">
+      <div class="auth-form-group">
+        <label class="auth-form-label" for="signin-email">Email Address</label>
+        <div class="auth-input-wrapper">
+          <i data-lucide="mail" class="auth-input-icon" style="width: 18px; height: 18px;"></i>
+          <input 
+            type="email" 
+            id="signin-email" 
+            class="auth-input-field" 
+            placeholder="you@domain.com" 
+            required 
+            autocomplete="email"
+          />
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label class="auth-form-label" for="signin-password">Password</label>
+        <div class="auth-input-wrapper">
+          <i data-lucide="lock" class="auth-input-icon" style="width: 18px; height: 18px;"></i>
+          <input 
+            type="${state.authModal.showPassword ? 'text' : 'password'}" 
+            id="signin-password" 
+            class="auth-input-field" 
+            placeholder="Enter your password" 
+            required 
+            autocomplete="current-password"
+          />
+          <button type="button" class="auth-password-toggle-btn" id="toggle-password-visibility" title="Show or hide password">
+            <i data-lucide="${state.authModal.showPassword ? 'eye-off' : 'eye'}" style="width: 16px; height: 16px;"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="auth-options-row">
+        <label class="auth-remember-label">
+          <input type="checkbox" id="signin-remember" checked />
+          <span>Remember me</span>
+        </label>
+        <a class="auth-forgot-link" id="forgot-password-link">Forgot password?</a>
+      </div>
+
+      <button type="submit" class="btn-gold" id="btn-submit-signin" style="width: 100%; padding: 13px; font-size: 1rem;" ${state.authModal.loading ? 'disabled' : ''}>
+        ${state.authModal.loading ? `
+          <i data-lucide="loader" style="width: 18px; height: 18px; animation: spin 1s linear infinite;"></i>
+          <span>Signing in...</span>
+        ` : `
+          <i data-lucide="log-in" style="width: 18px; height: 18px;"></i>
+          <span>Sign In to PhotoReeti</span>
+        `}
+      </button>
+    </form>
+  `;
+}
+
+function renderSignupForm() {
+  const isClient = state.authModal.role === 'client';
+  return `
+    <form id="auth-signup-form">
+      <div class="auth-form-group">
+        <label class="auth-form-label">I want to join as</label>
+        <div class="auth-role-select-grid">
+          <div class="auth-role-card ${isClient ? 'selected' : ''}" data-role="client" id="role-select-client">
+            <i data-lucide="user" class="auth-role-card-icon"></i>
+            <div class="auth-role-card-title">Client</div>
+            <div class="auth-role-card-desc">Direct P2P quotes & zero commission</div>
+          </div>
+          <div class="auth-role-card ${!isClient ? 'selected' : ''}" data-role="photographer" id="role-select-photographer">
+            <i data-lucide="camera" class="auth-role-card-icon"></i>
+            <div class="auth-role-card-title">Photographer</div>
+            <div class="auth-role-card-desc">Showcase portfolio & keep 100% of quote</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label class="auth-form-label" for="signup-name">Full Name</label>
+        <div class="auth-input-wrapper">
+          <i data-lucide="user-check" class="auth-input-icon" style="width: 18px; height: 18px;"></i>
+          <input 
+            type="text" 
+            id="signup-name" 
+            class="auth-input-field" 
+            placeholder="e.g. Siddharth Verma" 
+            required 
+            autocomplete="name"
+          />
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label class="auth-form-label" for="signup-email">Email Address</label>
+        <div class="auth-input-wrapper">
+          <i data-lucide="mail" class="auth-input-icon" style="width: 18px; height: 18px;"></i>
+          <input 
+            type="email" 
+            id="signup-email" 
+            class="auth-input-field" 
+            placeholder="name@example.com" 
+            required 
+            autocomplete="email"
+          />
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label class="auth-form-label" for="signup-phone">Phone / WhatsApp (Optional)</label>
+        <div class="auth-input-wrapper">
+          <i data-lucide="phone" class="auth-input-icon" style="width: 18px; height: 18px;"></i>
+          <input 
+            type="tel" 
+            id="signup-phone" 
+            class="auth-input-field" 
+            placeholder="+91 98765 43210" 
+            autocomplete="tel"
+          />
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label class="auth-form-label" for="signup-password">Password (Min 6 Characters)</label>
+        <div class="auth-input-wrapper">
+          <i data-lucide="lock" class="auth-input-icon" style="width: 18px; height: 18px;"></i>
+          <input 
+            type="${state.authModal.showPassword ? 'text' : 'password'}" 
+            id="signup-password" 
+            class="auth-input-field" 
+            placeholder="Create a secure password" 
+            minlength="6" 
+            required 
+            autocomplete="new-password"
+          />
+          <button type="button" class="auth-password-toggle-btn" id="toggle-password-visibility" title="Show or hide password">
+            <i data-lucide="${state.authModal.showPassword ? 'eye-off' : 'eye'}" style="width: 16px; height: 16px;"></i>
+          </button>
+        </div>
+      </div>
+
+      <button type="submit" class="btn-gold" id="btn-submit-signup" style="width: 100%; padding: 13px; font-size: 1rem; margin-top: 6px;" ${state.authModal.loading ? 'disabled' : ''}>
+        ${state.authModal.loading ? `
+          <i data-lucide="loader" style="width: 18px; height: 18px; animation: spin 1s linear infinite;"></i>
+          <span>Creating account...</span>
+        ` : `
+          <i data-lucide="sparkles" style="width: 18px; height: 18px;"></i>
+          <span>Create Free Account</span>
+        `}
+      </button>
+    </form>
   `;
 }
 
@@ -1554,12 +1899,406 @@ function attachEventListeners() {
       renderApp();
     });
   });
+
+  // Attach Authentication & Profile Listeners
+  attachAuthEventListeners();
+
+  // Close user dropdown when clicking outside
+  if (!window._userDropdownListenerAttached) {
+    window.addEventListener('click', (e) => {
+      if (state.userDropdownOpen) {
+        const menuWrapper = document.getElementById('user-menu-wrapper');
+        if (menuWrapper && !menuWrapper.contains(e.target)) {
+          state.userDropdownOpen = false;
+          renderApp();
+        }
+      }
+    });
+    window._userDropdownListenerAttached = true;
+  }
+}
+
+// Authentication & Profile Event Listeners Helper
+function attachAuthEventListeners() {
+  // Open Auth Modal Buttons
+  const openAuthBtn = document.getElementById('open-auth-modal-btn');
+  if (openAuthBtn) {
+    openAuthBtn.addEventListener('click', () => {
+      state.authModal.isOpen = true;
+      state.authModal.mode = 'login';
+      state.authModal.error = null;
+      state.authModal.success = null;
+      renderApp();
+    });
+  }
+
+  const splashAuthBtn = document.getElementById('splash-auth-trigger');
+  if (splashAuthBtn) {
+    splashAuthBtn.addEventListener('click', () => {
+      state.authModal.isOpen = true;
+      state.authModal.mode = 'login';
+      state.authModal.error = null;
+      state.authModal.success = null;
+      renderApp();
+    });
+  }
+
+  const bottomNavAuthBtn = document.getElementById('bottom-nav-auth-btn');
+  if (bottomNavAuthBtn) {
+    bottomNavAuthBtn.addEventListener('click', () => {
+      if (state.currentUser) {
+        state.userDropdownOpen = !state.userDropdownOpen;
+        renderApp();
+      } else {
+        state.authModal.isOpen = true;
+        state.authModal.mode = 'login';
+        state.authModal.error = null;
+        state.authModal.success = null;
+        renderApp();
+      }
+    });
+  }
+
+  // Close Auth Modal
+  const closeAuthBtn = document.getElementById('close-auth-modal-btn');
+  if (closeAuthBtn) {
+    closeAuthBtn.addEventListener('click', () => {
+      state.authModal.isOpen = false;
+      renderApp();
+    });
+  }
+
+  const authOverlay = document.getElementById('auth-modal-overlay');
+  if (authOverlay) {
+    authOverlay.addEventListener('click', (e) => {
+      if (e.target === authOverlay) {
+        state.authModal.isOpen = false;
+        renderApp();
+      }
+    });
+  }
+
+  // Tab switching: Login vs Signup
+  const tabLoginBtn = document.getElementById('tab-login-btn');
+  if (tabLoginBtn) {
+    tabLoginBtn.addEventListener('click', () => {
+      state.authModal.mode = 'login';
+      state.authModal.error = null;
+      renderApp();
+    });
+  }
+
+  const tabSignupBtn = document.getElementById('tab-signup-btn');
+  if (tabSignupBtn) {
+    tabSignupBtn.addEventListener('click', () => {
+      state.authModal.mode = 'signup';
+      state.authModal.error = null;
+      renderApp();
+    });
+  }
+
+  const switchSignupLink = document.getElementById('switch-to-signup-link');
+  if (switchSignupLink) {
+    switchSignupLink.addEventListener('click', () => {
+      state.authModal.mode = 'signup';
+      state.authModal.error = null;
+      renderApp();
+    });
+  }
+
+  const switchLoginLink = document.getElementById('switch-to-login-link');
+  if (switchLoginLink) {
+    switchLoginLink.addEventListener('click', () => {
+      state.authModal.mode = 'login';
+      state.authModal.error = null;
+      renderApp();
+    });
+  }
+
+  // Role selector cards in Signup
+  const roleSelectClient = document.getElementById('role-select-client');
+  if (roleSelectClient) {
+    roleSelectClient.addEventListener('click', () => {
+      state.authModal.role = 'client';
+      renderApp();
+    });
+  }
+
+  const roleSelectPhotographer = document.getElementById('role-select-photographer');
+  if (roleSelectPhotographer) {
+    roleSelectPhotographer.addEventListener('click', () => {
+      state.authModal.role = 'photographer';
+      renderApp();
+    });
+  }
+
+  // Password visibility toggle
+  const togglePassBtn = document.getElementById('toggle-password-visibility');
+  if (togglePassBtn) {
+    togglePassBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      state.authModal.showPassword = !state.authModal.showPassword;
+      renderApp();
+    });
+  }
+
+  // Quick 1-Click Demo Logins
+  const demoCreatorBtn = document.getElementById('demo-creator-btn');
+  if (demoCreatorBtn) {
+    demoCreatorBtn.addEventListener('click', () => {
+      state.currentUser = {
+        id: 'p1',
+        email: 'kabir@vermacinematics.com',
+        fullName: 'Kabir Verma',
+        role: 'photographer',
+        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+        phone: '+91 98201 12345'
+      };
+      state.userRole = 'photographer';
+      localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+      state.authModal.isOpen = false;
+      state.authModal.error = null;
+      renderApp();
+      showToast('Welcome back, Kabir Verma! Signed in as Master Creator.');
+      triggerCelebration();
+    });
+  }
+
+  const demoClientBtn = document.getElementById('demo-client-btn');
+  if (demoClientBtn) {
+    demoClientBtn.addEventListener('click', () => {
+      state.currentUser = {
+        id: 'usr_ananya',
+        email: 'ananya.sharma@gmail.com',
+        fullName: 'Ananya Sharma',
+        role: 'client',
+        avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80',
+        phone: '+91 98111 67890'
+      };
+      state.userRole = 'client';
+      localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+      state.authModal.isOpen = false;
+      state.authModal.error = null;
+      renderApp();
+      showToast('Welcome, Ananya Sharma! Signed in as Verified Client.');
+      triggerCelebration();
+    });
+  }
+
+  // Forgot password
+  const forgotPassLink = document.getElementById('forgot-password-link');
+  if (forgotPassLink) {
+    forgotPassLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      const emailInput = document.getElementById('signin-email');
+      const email = emailInput?.value.trim();
+      if (email) {
+        showToast(`Password reset link dispatched to ${email}`);
+      } else {
+        showToast('Please type your email address to receive reset instructions.');
+      }
+    });
+  }
+
+  // Sign In Form submission
+  const signinForm = document.getElementById('auth-signin-form');
+  if (signinForm) {
+    signinForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('signin-email').value.trim();
+      const password = document.getElementById('signin-password').value;
+
+      state.authModal.loading = true;
+      state.authModal.error = null;
+      renderApp();
+
+      try {
+        const { data, error } = await signInUser({ email, password });
+        if (error) {
+          state.authModal.loading = false;
+          state.authModal.error = error.message || 'Incorrect email or password.';
+          renderApp();
+          return;
+        }
+
+        const user = data?.user;
+        const meta = user?.user_metadata || {};
+        state.currentUser = {
+          id: user?.id || 'usr_' + Date.now(),
+          email: user?.email || email,
+          fullName: meta.full_name || email.split('@')[0],
+          role: meta.role || 'client',
+          avatar: meta.avatar || null,
+          phone: meta.phone || ''
+        };
+        state.userRole = state.currentUser.role;
+        localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+        state.authModal.isOpen = false;
+        state.authModal.loading = false;
+        state.authModal.error = null;
+        renderApp();
+        showToast(`Welcome back, ${state.currentUser.fullName}!`);
+        triggerCelebration();
+      } catch (err) {
+        state.authModal.loading = false;
+        state.authModal.error = err.message || 'An unexpected error occurred during sign in.';
+        renderApp();
+      }
+    });
+  }
+
+  // Sign Up Form submission
+  const signupForm = document.getElementById('auth-signup-form');
+  if (signupForm) {
+    signupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fullName = document.getElementById('signup-name').value.trim();
+      const email = document.getElementById('signup-email').value.trim();
+      const phone = document.getElementById('signup-phone')?.value.trim() || '';
+      const password = document.getElementById('signup-password').value;
+      const role = state.authModal.role || 'client';
+
+      state.authModal.loading = true;
+      state.authModal.error = null;
+      renderApp();
+
+      try {
+        const { data, error } = await signUpUser({ email, password, fullName, role, phone });
+        if (error) {
+          state.authModal.loading = false;
+          state.authModal.error = error.message || 'Failed to create account.';
+          renderApp();
+          return;
+        }
+
+        const user = data?.user;
+        state.currentUser = {
+          id: user?.id || 'usr_' + Date.now(),
+          email: email,
+          fullName: fullName,
+          role: role,
+          phone: phone,
+          avatar: null
+        };
+        state.userRole = role;
+        localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+        state.authModal.isOpen = false;
+        state.authModal.loading = false;
+        state.authModal.error = null;
+        renderApp();
+        showToast(`Welcome to PhotoReeti, ${fullName}! Your account has been registered.`);
+        triggerCelebration();
+      } catch (err) {
+        state.authModal.loading = false;
+        state.authModal.error = err.message || 'An error occurred during account creation.';
+        renderApp();
+      }
+    });
+  }
+
+  // User Profile Menu Dropdown toggle
+  const userMenuToggle = document.getElementById('user-profile-menu-toggle');
+  if (userMenuToggle) {
+    userMenuToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.userDropdownOpen = !state.userDropdownOpen;
+      renderApp();
+    });
+  }
+
+  // Dropdown: Switch Mode
+  const dropSwitchRole = document.getElementById('dropdown-switch-role-btn');
+  if (dropSwitchRole) {
+    dropSwitchRole.addEventListener('click', () => {
+      state.userRole = state.userRole === 'client' ? 'photographer' : 'client';
+      if (state.currentUser) {
+        state.currentUser.role = state.userRole;
+        localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+      }
+      state.userDropdownOpen = false;
+      renderApp();
+      showToast(`Switched view to ${state.userRole === 'client' ? 'Client' : 'Creator'} mode.`);
+    });
+  }
+
+  // Dropdown: My Bookings
+  const dropBookings = document.getElementById('dropdown-bookings-btn');
+  if (dropBookings) {
+    dropBookings.addEventListener('click', () => {
+      state.currentScreen = 'bookings';
+      state.userDropdownOpen = false;
+      renderApp();
+    });
+  }
+
+  // Dropdown: My Messages
+  const dropChat = document.getElementById('dropdown-chat-btn');
+  if (dropChat) {
+    dropChat.addEventListener('click', () => {
+      state.currentScreen = 'chat';
+      state.userDropdownOpen = false;
+      renderApp();
+    });
+  }
+
+  // Dropdown: Sign Out
+  const dropSignout = document.getElementById('dropdown-signout-btn');
+  if (dropSignout) {
+    dropSignout.addEventListener('click', async () => {
+      await signOutUser();
+      localStorage.removeItem('photoreeti_user');
+      state.currentUser = null;
+      state.userDropdownOpen = false;
+      renderApp();
+      showToast('Signed out of PhotoReeti.');
+    });
+  }
 }
 
 // Supabase Async Hydration
 async function initBackendData() {
   if (isSupabaseConfigured) {
     try {
+      // Subscribe to Supabase Auth state changes
+      subscribeToAuth((user, event) => {
+        if (event === 'SIGNED_IN' && user) {
+          const meta = user.user_metadata || {};
+          state.currentUser = {
+            id: user.id,
+            email: user.email,
+            fullName: meta.full_name || user.email.split('@')[0],
+            role: meta.role || state.userRole || 'client',
+            avatar: meta.avatar || null,
+            phone: meta.phone || ''
+          };
+          state.userRole = state.currentUser.role;
+          localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+          renderApp();
+        } else if (event === 'SIGNED_OUT') {
+          state.currentUser = null;
+          state.userDropdownOpen = false;
+          localStorage.removeItem('photoreeti_user');
+          renderApp();
+        }
+      });
+
+      // Hydrate session if already logged in via Supabase
+      const remoteUser = await getAuthUser();
+      if (remoteUser && !state.currentUser) {
+        const meta = remoteUser.user_metadata || {};
+        state.currentUser = {
+          id: remoteUser.id,
+          email: remoteUser.email,
+          fullName: meta.full_name || remoteUser.email.split('@')[0],
+          role: meta.role || 'client',
+          avatar: meta.avatar || null,
+          phone: meta.phone || ''
+        };
+        state.userRole = state.currentUser.role;
+        localStorage.setItem('photoreeti_user', JSON.stringify(state.currentUser));
+        renderApp();
+      }
+
       const [remotePhotographers, remoteBookings] = await Promise.all([
         getPhotographersFromSupabase(),
         getBookingsFromSupabase()
@@ -1587,3 +2326,4 @@ async function initBackendData() {
 // Initial Boot
 renderApp();
 initBackendData();
+
